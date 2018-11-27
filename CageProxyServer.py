@@ -4,11 +4,16 @@
 # and forwards them to the client (browser).
 # Written by: Maisha Rumelia Rahman
 # For: CS 330 Computer Networking Final Project
+#
+# ***Please note that this version uses the requests and bs4 libraries
+#    which you will have to install if you want to run this code***
 
 import socket
 import _thread
+import requests
+from bs4 import BeautifulSoup
 
-MAX_RECV_SIZE = 4096  # global variable for maximum number of bytes that can be received (passed as argument to recv() function)
+MAX_RECV_SIZE = 8192  # global variable for maximum number of bytes that can be received (passed as argument to recv() function)
 
 
 def main():
@@ -54,45 +59,45 @@ def cage_proxy_thread(conn, addr):
     request = conn.recv(MAX_RECV_SIZE)  # set receive buffer size to 4096 bytes
     print("Request received from", addr, ":", request)  # print the request
 
-    # get the destination server and port number from the request (port # is 80 if not specified)
-    (server, port) = get_host_port(request)
-    print("Connect to HOST:", server.decode('utf-8'), "PORT:", port)
+    if get_request_verb(request) == b'CONNECT' or get_request_verb(request) == b'':
+        print("Cannot make this request")
+    else:
+        # get the destination server and port number from the request (port # is 80 if not specified)
+        (server, port) = get_host_port(request)
+        print("Connect to HOST:", server.decode('utf-8'), "PORT:", port)
 
-    # create new socket using 'with' so that we don't have to call s.close()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as new_s:
-        # connect new socket to server and specified port number
-        new_s.connect((server, port))
+        url = request.split(b' ')[1]
+        print("Request url: ", url)
 
-        # forward client request to server
-        new_s.sendall(request)
+        # send GET request using requests library and get response
+        response_data = requests.get(url).text.encode("utf-8")
+        print("Data received: ", response_data)
 
-        # receive data from the server
-        while True:
-            response_data = new_s.recv(MAX_RECV_SIZE)
-            print("Receiving data from", server.decode('utf-8'))
+        # if the response contains an HTML file, then replace all the
+        # links in it
+        if response_data.find(b'<html>') != -1:
+            # change the URLs in the response data
+            response_data = replace_all_urls(response_data)
 
-            # if there is some data, send it back to client. Otherwise, break
-            if len(response_data) > 0:
-                conn.sendall(response_data)
-            else:
-                print("Error in response data received")
-                break
+        # forward changed response to client
+        conn.sendall(response_data)
+
+
+def get_request_verb(request):
+    request_verb = request.split(b' ')[0]
+    return request_verb
 
 
 def get_host_port(i_request):
     """ Function get_host_port()
         Takes in request made by browser (client), extracts the destination host
         name and port number from it and returns the two as a tuple.
-        
-        :param i_request: request made by browser (client)
+        :param i_request: request made by browser (client). Type: bytes literal
         :return: (hostname, port) tuple
     """
     # parse host from request
-    # extract everything after the word 'Host: '
-    host_with_extra = i_request.split(b'Host: ')[1]
-    
-    # extract everything before the first \r
-    host_with_port = host_with_extra.split(b'\r')[0]
+    # try to extract everything after the word 'Host: '
+    host_with_port = (i_request.split(b'Host: ')[1]).split(b'\r')[0]
 
     # if there is no port number specified, set port as 80
     # else, separate out the hostname and port number
@@ -103,8 +108,29 @@ def get_host_port(i_request):
         hostname = host_with_port.split(b':')[0]
         port = int(host_with_port.split(b':')[1])
 
-    # return (hostname, port) tuple
+    # return (HOST, PORT) tuple
     return hostname, port
+
+
+def replace_all_urls(response):
+    soup = BeautifulSoup(response, 'lxml')
+    a_tags = soup.find_all('a')
+    cat_link = "https://www.youtube.com/watch?v=z3U0udLH974"
+
+    # create a new "a tag" with cat_link
+    new_a_tag = soup.new_tag("a", href=cat_link)
+
+    # loop through "soup" and replace original a tags with our desired one
+    for a_tag in a_tags:
+        # make sure the string inside is preserved
+        new_a_tag.string = a_tag.string
+        a_tag.replace_with(new_a_tag)
+
+        # reset new_a_tag for next iteration
+        new_a_tag = soup.new_tag("a", href=cat_link)
+
+    # convert to bytes like object and return
+    return soup.encode("utf-8")
 
 
 if __name__ == "__main__":

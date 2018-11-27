@@ -83,26 +83,57 @@ def cage_proxy_thread(conn, addr):
 
 
 def recvall(the_socket):
-    # receive one segment of data from the server
-    response_data = the_socket.recv(MAX_RECV_SIZE)
-    print("Data received first: ", response_data)
+    # variables to handle receive
+    content_length = -1
+    content = b''
+    first_time = True
 
-    # if there is a Content-Length header, receive data according to content length
-    if response_data.find(b'Content-Length: ') != -1:
-        content_length = get_content_length(response_data)
-        print("Content length: ", content_length)
-        # if there is content, do a split to get the content
-        if len(response_data.split(b'\r\n\r\n')[1]) > 0:
-            response_data = response_data.split(b'\r\n\r\n')[1]
+    # loop until you receive all the data and append it all to content
+    while True:
+        # if it is the very first recv call then separate
+        # the content from the header (if there is any content)
+        if first_time:
+            first_time = False
+            # get some new data using recv
+            new_data = the_socket.recv(1000)
+            print("New data: ", new_data)
 
-            # while the length of the total data received is not equal
-            # to the content length specified, keep calling receive and
-            # appending to the total data received
-            while len(response_data) < int(content_length):
-                response_data += the_socket.recv(MAX_RECV_SIZE)
-                print("Received {} bytes".format(len(response_data)))
+            # if you find the Content Length header then
+            # parse out the content length
+            # else set content_length to -1
+            if new_data.find(b'Content-Length: ') != -1:
+                content_length = get_content_length(new_data)
+                print("Content Length: ", content_length)
 
-    return response_data
+            # if there is some content, then separate it from headers
+            if len(new_data.split(b'\r\n\r\n')[1]) > 0:
+                first_part = new_data.split(b'\r\n\r\n', 1)[1]
+                new_data = first_part
+        # if it is not the first time, recv in smaller chunks
+        # so the the recv function does not wait a long time
+        # to return
+        else:
+            new_data = the_socket.recv(250)
+            print("New data: ", new_data)
+
+        # add new data to content
+        content += new_data
+
+        # handle packets with Content Length header
+        # if the length of the total data received is greater than the
+        # content length specified and we are sure that the packer did
+        # have a content length header, then break
+        if int(content_length) <= len(content) and content_length != -1:
+            break
+
+        # handle chunked encoded packets
+        # if we reach the end sentinel substring for
+        # chunked encoding \r\n0\r\n then break
+        # DOES NOT WORK
+        if content.find(b'\r\n0\r\n') != -1:
+            break
+    print("Inside the function, the total received: ", content)
+    return content
 
 def get_request_verb(request):
     request_verb = request.split(b' ')[0]

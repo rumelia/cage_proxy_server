@@ -8,7 +8,7 @@
 import socket
 import _thread
 
-MAX_RECV_SIZE = 4096  # global variable for maximum number of bytes that can be received (passed as argument to recv() function)
+MAX_RECV_SIZE = 8192  # global variable for maximum number of bytes that can be received (passed as argument to recv() function)
 
 
 def main():
@@ -54,45 +54,68 @@ def cage_proxy_thread(conn, addr):
     request = conn.recv(MAX_RECV_SIZE)  # set receive buffer size to 4096 bytes
     print("Request received from", addr, ":", request)  # print the request
 
-    # get the destination server and port number from the request (port # is 80 if not specified)
-    (server, port) = get_host_port(request)
-    print("Connect to HOST:", server.decode('utf-8'), "PORT:", port)
+    if get_request_verb(request) != b'GET' and get_request_verb(request) != b'POST':
+        print("Cannot make this request")
+    else:
+        # get the destination server and port number from the request (port # is 80 if not specified)
+        (server, port) = get_host_port(request)
+        print("Connect to HOST:", server.decode('utf-8'), "PORT:", port)
 
-    # create new socket using 'with' so that we don't have to call s.close()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as new_s:
-        # connect new socket to server and specified port number
-        new_s.connect((server, port))
+        # create new socket using 'with' so that we don't have to call s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as new_s:
+            # connect new socket to server and specified port number
+            new_s.connect((server, port))
 
-        # forward client request to server
-        new_s.sendall(request)
+            # if there is an encoding specified, modify the request and then forward it
+            if request.find(b'Accept-Encoding: ') != -1:
+                request = change_encoding_type(request)
 
-        # receive data from the server
-        while True:
-            response_data = new_s.recv(MAX_RECV_SIZE)
+            # forward request to server
+            print("Request being forwarded to server:  ", request)
+            new_s.sendall(request)
+
             print("Receiving data from", server.decode('utf-8'))
+            total_data_received = recvall(new_s)
+            print("Total data received: ", total_data_received)
 
-            # if there is some data, send it back to client. Otherwise, break
-            if len(response_data) > 0:
-                conn.sendall(response_data)
-            else:
-                print("Error in response data received")
-                break
+            print("Sending received data to browser...")
+            conn.sendall(total_data_received)
+
+def recvall(the_socket):
+    # receive data from the server
+    total_data = []
+    while True:
+        response_data = the_socket.recv(MAX_RECV_SIZE)
+        print("Received {} bytes".format(len(response_data)))
+
+        # if there is some data, append it to total data, otherwise break
+        if len(response_data) > 0:
+            print("Data being appended: ", response_data)
+            total_data.append(response_data)
+        else:
+            print("No data received")
+            break
+        # join array into bytes like object
+        total_data_str = b''.join(total_data)
+
+    return total_data_str
+
+
+def get_request_verb(request):
+    request_verb = request.split(b' ')[0]
+    return request_verb
 
 
 def get_host_port(i_request):
     """ Function get_host_port()
         Takes in request made by browser (client), extracts the destination host
         name and port number from it and returns the two as a tuple.
-        
-        :param i_request: request made by browser (client)
+        :param i_request: request made by browser (client). Type: bytes literal
         :return: (hostname, port) tuple
     """
     # parse host from request
-    # extract everything after the word 'Host: '
-    host_with_extra = i_request.split(b'Host: ')[1]
-    
-    # extract everything before the first \r
-    host_with_port = host_with_extra.split(b'\r')[0]
+    # try to extract everything after the word 'Host: '
+    host_with_port = (i_request.split(b'Host: ')[1]).split(b'\r')[0]
 
     # if there is no port number specified, set port as 80
     # else, separate out the hostname and port number
@@ -103,8 +126,14 @@ def get_host_port(i_request):
         hostname = host_with_port.split(b':')[0]
         port = int(host_with_port.split(b':')[1])
 
-    # return (hostname, port) tuple
+    # return (HOST, PORT) tuple
     return hostname, port
+
+
+def change_encoding_type(request):
+    # get everything after Content-Encoding:
+    encoding = (request.split(b'Accept-Encoding: ')[1]).split(b'\r')[0]
+    return request.replace(encoding, b'identity')
 
 
 if __name__ == "__main__":
